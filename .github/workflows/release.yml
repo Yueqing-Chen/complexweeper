@@ -1,0 +1,67 @@
+name: release
+
+# 推 v* 标签 → 构建 → 建 Release 并附上 exe（中文名 + 一个纯 ASCII 名，省得下载链接被转义）
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+
+      - name: 装 Zig 0.14.1
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          $url = 'https://ziglang.org/download/0.14.1/zig-x86_64-windows-0.14.1.zip'
+          $zip = Join-Path $env:RUNNER_TEMP 'zig.zip'
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          Expand-Archive $zip -DestinationPath $env:RUNNER_TEMP -Force
+          $dir = Get-ChildItem $env:RUNNER_TEMP -Directory -Filter 'zig-*windows*' | Select-Object -First 1
+          if (-not $dir) { throw '解压后找不到 zig 目录' }
+          $exe = Join-Path $dir.FullName 'zig.exe'
+          if (-not (Test-Path $exe)) { throw "找不到 $exe" }
+          $dir.FullName | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          $got = & $exe version
+          Write-Host "zig = $got"
+          if ($got -ne '0.14.1') { throw "Zig 版本不对：$got，本工程按 0.14.1 写" }
+
+      - name: 构建 + 两套自检
+        shell: pwsh
+        run: ./正式版/build.ps1
+
+      - name: 发 Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = [regex]::Match((Get-Content '正式版/src/main.zig' -Raw -Encoding UTF8), 'const APP_VERSION = "([0-9]+\.[0-9]+\.[0-9]+)";').Groups[1].Value
+          if (-not $v) { throw '读不到 APP_VERSION' }
+          $exe = "正式版/复扫雷 $v.exe"
+          if (-not (Test-Path $exe)) { throw "找不到产物：$exe" }
+          # 附件只传纯 ASCII 名：gh 会按空格拆参数，带空格的名字传上去只剩后半截
+          # （复扫雷 1.0.11.exe → 1.0.11.exe，踩过）。文件内容一样，就是同一个 exe。
+          $ascii = "complexweeper-$v-win64.exe"
+          Copy-Item $exe $ascii -Force
+          $tag = "${{ github.ref_name }}"
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $ascii --clobber
+          } else {
+            gh release create $tag $ascii `
+              --title "复扫雷 Complexweeper $v" `
+              --generate-notes `
+              --verify-tag
+          }
+          Write-Host '--- Release 附件 ---'
+          gh release view $tag --json assets --jq '.assets[] | "  \(.name)  \(.size) 字节"'

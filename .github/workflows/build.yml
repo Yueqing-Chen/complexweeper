@@ -1,0 +1,64 @@
+name: build
+
+# push / PR 都构建一遍，附件里给出 exe 与两份自检报告
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # 0) .ps1 必须带 UTF-8 BOM —— PowerShell 5.1 读无 BOM 文件会按 ANSI 解析，中文全乱码。
+      #    编辑工具保存时会把 BOM 去掉，所以每次构建前先查一遍。
+      - name: 检查 .ps1 的 UTF-8 BOM
+        shell: pwsh
+        run: |
+          $bad = @()
+          Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object {
+            $b = [System.IO.File]::ReadAllBytes($_.FullName)
+            if ($b.Length -lt 3 -or $b[0] -ne 0xEF -or $b[1] -ne 0xBB -or $b[2] -ne 0xBF) {
+              $bad += $_.FullName.Substring((Get-Location).Path.Length + 1)
+            }
+          }
+          if ($bad.Count) { throw ('这些脚本缺 UTF-8 BOM：' + ($bad -join ' / ')) }
+          Write-Host '所有 .ps1 都带着 UTF-8 BOM'
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+
+      - name: 装 Zig 0.14.1
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'   # 关掉进度条，Invoke-WebRequest 快一个量级
+          $url = 'https://ziglang.org/download/0.14.1/zig-x86_64-windows-0.14.1.zip'
+          $zip = Join-Path $env:RUNNER_TEMP 'zig.zip'
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          Expand-Archive $zip -DestinationPath $env:RUNNER_TEMP -Force
+          $dir = Get-ChildItem $env:RUNNER_TEMP -Directory -Filter 'zig-*windows*' | Select-Object -First 1
+          if (-not $dir) { throw '解压后找不到 zig 目录' }
+          $exe = Join-Path $dir.FullName 'zig.exe'
+          if (-not (Test-Path $exe)) { throw "找不到 $exe" }
+          $dir.FullName | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          $got = & $exe version
+          Write-Host "zig = $got（$($dir.Name)）"
+          if ($got -ne '0.14.1') { throw "Zig 版本不对：$got，本工程按 0.14.1 写" }
+
+      - name: 构建 + 两套自检
+        shell: pwsh
+        run: ./正式版/build.ps1
+
+      - name: 上传产物与自检报告
+        uses: actions/upload-artifact@v5
+        with:
+          name: complexweeper-${{ github.sha }}
+          path: |
+            正式版/复扫雷*.exe
+            正式版/build/selftest.txt
+            正式版/build/uitest.txt
+          if-no-files-found: error
