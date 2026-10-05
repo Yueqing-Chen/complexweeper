@@ -265,11 +265,19 @@ jobs:
         run: |
           set -euo pipefail
           asset=$(ls 正式版/build/*.AppImage)
-          gh release view "$TAG" >/dev/null 2>&1 || {
-            echo "::error::Release $TAG 不存在。windows job 应该已经把它建好了（release.yml 里 linux job 写了 needs: release）。"
-            exit 1
-          }
-          gh release upload "$TAG" "$asset" --clobber
-          echo "--- Release 附件 ---"
-          gh release view "$TAG" --json assets \
-            --jq '.assets[] | "  \(.name)  \(.size) 字节"'
+          # Windows job 是**并行**跑的，这个 job 完全不依赖它，所以 Release 可能
+          # 还没建好。这里有限次重试，而不是在 release.yml 里加 needs 去串行化
+          # —— 两个平台谁先谁后都能成，而且不用等 Windows 那几分钟。
+          for ((i = 1; i <= 18; i++)); do
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              gh release upload "$TAG" "$asset" --clobber
+              echo "--- Release 附件 ---"
+              gh release view "$TAG" --json assets \
+                --jq '.assets[] | "  \(.name)  \(.size) 字节"'
+              exit 0
+            fi
+            echo "Release $TAG 还没出现（第 $i/18 次），10 秒后再试"
+            sleep 10
+          done
+          echo "::error::等了 3 分钟 Release $TAG 还是没出现。Windows job 是不是失败了？看它那边的日志。"
+          exit 1

@@ -124,10 +124,9 @@ Linux 那个 job 会跑在 `debian:bookworm-slim` 容器里（宿主 `ubuntu-24.
 截图作为 artifact 传上来。
 
 发 Release 时 `release.yml` 用 `workflow_call` **复用** `build-linux.yml` 出 AppImage，
-构建步骤不复制第二份（容器、依赖、版本钉死都只维护一处）。Linux job 写了
-`needs: release`，让 Windows 先把 Release 建出来、Linux 只负责 upload —— 两个 job
-并行去 `gh release create` 会抢同一个 tag，串起来就没这个竞态。`release.yml` 里原来
-那个 Windows job 一行没动。
+构建步骤不复制第二份（容器、依赖、版本钉死都只维护一处）。Linux job 和 Windows job
+是并列独立的，不加 `needs` 串行化——Release 还没建好的情况由 `build-linux.yml` 里
+一段有限重试兜住，谁先谁后都能成。`release.yml` 里原来那个 Windows job 一行没动。
 
 **发 Release 要推标签，不能在分支上手动触发**：`release.yml` 用
 `github.ref_name` 当 tag，在 `main` 上手动触发会去建一个叫 `main` 的 Release，

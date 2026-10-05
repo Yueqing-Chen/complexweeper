@@ -69,13 +69,13 @@ jobs:
 
   # Linux 端：复用 build-linux.yml 出 AppImage，挂到同一个 Release。
   #
-  #   * 构建步骤不复制一份 —— 容器基础镜像、28 个 apt 包、squashfuse 版本钉死
+  #   * 构建步骤不复制一份 —— 容器基础镜像、29 个 apt 包、squashfuse 版本钉死
   #     全在 build-linux.yml 里维护，改一处两边同时生效。
-  #   * needs: release —— 让 windows job 先把 Release 建出来，这里只负责 upload。
-  #     两个 job 并行去 gh release create 会抢同一个 tag，串起来就没有这个竞态。
+  #   * 和上面的 Windows job 是**并列独立**的，不加 needs：两个 job 并行跑，
+  #     谁先谁后都可能。Release 不存在的情况由 build-linux.yml 里那段重试兜住，
+  #     没必要为了一次 upload 把整个发版串行化。
   #   * 上面那个 release job 一行没动。
   linux:
-    needs: release
     permissions:
       contents: write
     uses: ./.github/workflows/build-linux.yml
