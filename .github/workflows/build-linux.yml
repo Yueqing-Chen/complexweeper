@@ -24,22 +24,38 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v5
-
+      # 依赖装在 checkout 之前：debian:bookworm-slim 里没有 git，
+      # 先装上 git，checkout 才走 git 而不是退化成 REST API 下载 tarball。
+      # 顺带把 git config 也提前设好，免得 checkout 在 root 下被 dubious ownership 拦。
       - name: 装构建依赖
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             git ca-certificates \
-            binutils curl file \
+            binutils curl file xz-utils \
             python3 gcc procps \
             libx11-dev libxft-dev libfreetype-dev libfontconfig1-dev \
             squashfs-tools \
             clang libfuse3-dev libsquashfuse-dev \
             liblz4-dev liblzo2-dev liblzma-dev libzstd-dev zlib1g-dev \
             xvfb x11-utils xdotool imagemagick fonts-noto-cjk
-          # 容器里以 root 跑，git 会拒绝操作别的 uid 建出来的 .git
           git config --global --add safe.directory '*'
+          # 工具链完整性自查：把 workflow 和四个脚本真正调到的外部命令挨个过一遍，
+          # 少一个就在这里炸，别拖到几百行之后才报 command not found。
+          missing=''
+          for c in bash sed awk grep find mktemp readlink stat tail head basename dirname \
+                   cat cp mv chmod strip file nm git curl tar xz \
+                   python3 gcc clang node mksquashfs ldd pkill \
+                   xwininfo xdotool import convert; do
+            command -v "$c" >/dev/null 2>&1 || missing="$missing $c"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::缺这些命令：$missing"
+            exit 1
+          fi
+          echo "工具链齐全 ✓（$(command -v bash | head -1) / shell=$BASH_VERSION）"
+
+      - uses: actions/checkout@v5
 
       # runtime.c 是按 sqfs_opts 的内存布局写 mountpoint 的，链接进去的
       # libsquashfuse 按它自己那版布局写 —— 版本一错位，编译照过、运行时报
@@ -83,8 +99,15 @@ jobs:
       - name: 装 Zig 0.14.1
         run: |
           set -euo pipefail
+          # node 是打包脚本的硬依赖（生成图集 + 切图标），前面已经装过。
+          # 顺带确认 setup-node 在容器里真的把 node 放上了 PATH。
+          command -v node >/dev/null || { echo "::error::node 不在 PATH 上，gen_atlas.js / make_icon.js 跑不了"; exit 1; }
+          node --version
+
           url='https://ziglang.org/download/0.14.1/zig-x86_64-linux-0.14.1.tar.xz'
           curl -fsSL -m 300 -o "$RUNNER_TEMP/zig.tar.xz" "$url"
+          # tar 自己不带 xz 解压器，会 exec 外部的 xz —— slim 镜像里默认没有，
+          # 所以上面必须装 xz-utils，否则这里报 "xz: Cannot exec"。
           tar -xf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
           dir=$(find "$RUNNER_TEMP" -maxdepth 1 -type d -name 'zig-*linux*' | head -1)
           [ -n "$dir" ] || { echo '解压后找不到 zig 目录'; exit 1; }

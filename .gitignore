@@ -18,3 +18,10 @@ squashfs-root/
 # 本地放的工具链
 zig.tar.xz
 zig/
+act
+正式版/act
+
+# 工作区杂项，别混进 PR
+# 正式版/LICENSE 是个 2024 年的 MIT 残留在工作区里（连署名都没有），上游仓库
+# 从来没跟踪过它；不写进 .gitignore 的话，每次 git add -A 都会被扫进提交里。
+正式版/LICENSE
