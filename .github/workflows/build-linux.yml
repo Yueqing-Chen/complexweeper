@@ -1,0 +1,129 @@
+name: build-linux
+
+# Linux（AppImage）构建。**故意不并进 build.yml**：那里只有 windows job，
+# 单独开一个文件，原作者那边 review 时 diff 只多一个新文件，改 Windows 的风险为零。
+#
+# 触发条件跟 build.yml 保持一致（push main / PR / 手动）。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    name: AppImage x86_64
+    # 钉在 22.04：libsquashfuse-dev 是 0.1.105（跟 runtime 的 sqfs_opts 布局配套，
+    # 换发行版就得重新验）。别改成 latest。
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: 装构建依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            binutils curl file \
+            libx11-dev libxft-dev libfreetype-dev libfontconfig1-dev \
+            squashfs-tools \
+            clang libfuse3-dev libsquashfuse-dev \
+            liblz4-dev liblzo2-dev liblzma-dev libzstd-dev zlib1g-dev \
+            xvfb x11-utils xdotool imagemagick fonts-noto-cjk
+
+      # runtime.c 是按 sqfs_opts 的内存布局写 mountpoint 的，链接进去的
+      # libsquashfuse 按它自己那版布局写 —— 版本一错位，编译照过、运行时报
+      # "Usage: ... ARCHIVE MOUNTPOINT"。这里提前钉死，别等产物坏了才发现。
+      - name: 核对 libsquashfuse 版本
+        run: |
+          got=$(dpkg-query -W -f='${Version}' libsquashfuse-dev)
+          echo "libsquashfuse-dev = $got"
+          case "$got" in
+            0.1.105*) ;;
+            *) echo "::error::squashfuse 不是 0.1.105，runtime 会链错。版本配套表见 正式版/tools/appimage-runtime/README.md" ; exit 1 ;;
+          esac
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+
+      - name: 装 Zig 0.14.1
+        run: |
+          set -euo pipefail
+          url='https://ziglang.org/download/0.14.1/zig-x86_64-linux-0.14.1.tar.xz'
+          curl -fsSL -m 300 -o "$RUNNER_TEMP/zig.tar.xz" "$url"
+          tar -xf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+          dir=$(find "$RUNNER_TEMP" -maxdepth 1 -type d -name 'zig-*linux*' | head -1)
+          [ -n "$dir" ] || { echo '解压后找不到 zig 目录'; exit 1; }
+          echo "$dir" >> "$GITHUB_PATH"
+          got=$("$dir/zig" version)
+          echo "zig = $got（$(basename "$dir")）"
+          [ "$got" = '0.14.1' ] || { echo "Zig 版本不对：$got，本工程按 0.14.1 写"; exit 1; }
+
+      # runtime-x86_64 是编译产物、不入库（见 .gitignore），CI 里现编。
+      - name: 编 AppImage type 2 runtime
+        working-directory: 正式版
+        run: |
+          set -euo pipefail
+          ./tools/appimage-runtime/build-runtime.sh
+          ls -l tools/appimage-runtime/runtime-x86_64
+
+      # src/x11.zig 的 Xlib 绑定是手写的：extern 参数个数或 struct 成员写错都不报错，
+      # 只在运行到那一行时炸。对账脚本读真头文件逐个核。
+      - name: X11 绑定对账
+        working-directory: 正式版
+        run: ./tools/check_x11_abi.sh
+
+      - name: 编译 + 规则自检 + 打 AppImage
+        working-directory: 正式版
+        run: ./build-linux.sh
+
+      - name: 验 AppImage 本身
+        run: |
+          set -euo pipefail
+          A=$(readlink -f "$(ls 正式版/build/*.AppImage)")
+          echo "== $A"
+
+          "$A" --appimage-offset        # runtime 解析自己的 ELF 节头算偏移量
+          "$A" --appimage-version
+
+          # --appimage-extract 走的是 runtime 里的解压分支，不需要 FUSE
+          tmp=$(mktemp -d)
+          (cd "$tmp" && "$A" --appimage-extract)
+          ls -l "$tmp/squashfs-root/usr/bin/complexweeper"
+          test -f "$tmp/squashfs-root/complexweeper.desktop"
+          test -f "$tmp/squashfs-root/complexweeper.png"
+
+          # 跑起来也走解压模式，避开 runner 上未必可用的 /dev/fuse
+          APPIMAGE_EXTRACT_AND_RUN=1 "$A" --version
+          APPIMAGE_EXTRACT_AND_RUN=1 "$A" --selftest "$tmp/st.txt"
+          tail -2 "$tmp/st.txt"
+          ldd "$tmp/squashfs-root/usr/bin/complexweeper" | sort
+
+      # 18 步真实交互：翻格、插旗、下拉菜单、三种对话框、自定义雷区、缩放、退出。
+      # **不装窗口管理器**——无 WM 下窗口固定在 +80+60，坐标才稳定；有 WM 会被随手挪走。
+      - name: UI 冒烟（Xvfb）
+        working-directory: 正式版
+        run: |
+          set -euo pipefail
+          xvfb-run -a -s '-screen 0 1280x900x24 -nolisten tcp' \
+            ./tools/ui_smoke.sh build/cs-linux /tmp/csui
+          ls /tmp/csui | head
+
+      # 失败时把截图捞出来看 —— 这个冒烟就是靠肉眼截图抓出「数字不显示」「文字偏下」的
+      - name: 冒烟截图（仅失败时）
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: complexweeper-ui-${{ github.sha }}
+          path: /tmp/csui/*.png
+          if-no-files-found: ignore
+
+      - name: 上传产物与自检报告
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: complexweeper-linux-${{ github.sha }}
+          path: |
+            正式版/build/*.AppImage
+            正式版/build/selftest.txt
+          if-no-files-found: error

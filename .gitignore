@@ -1,0 +1,20 @@
+# 打包/编译产物
+正式版/build/
+正式版/dist/
+*.AppImage
+squashfs-root/
+
+# 图集：由 tools/gen_atlas.js 从 素材/ 图集.png + 图集.json 生成。
+# build.ps1 第 1 步和 build-linux.sh 第 1 步都会现场生成，所以不入库 ——
+# 跟原作者的约定保持一致，也免得两边各生成一份、diff 全是二进制。
+正式版/src/atlas.bin
+正式版/src/assets.zig
+
+# 诊断工具的编译产物（源码 tools/wm_probe.c 在版本控制里）
+正式版/tools/wm_probe
+正式版/tools/appimage-runtime/runtime
+正式版/tools/appimage-runtime/runtime-x86_64
+
+# 本地放的工具链
+zig.tar.xz
+zig/
