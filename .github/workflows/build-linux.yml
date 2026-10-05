@@ -16,6 +16,13 @@ jobs:
     # 宿主只提供内核，真正干活的是下面的容器 userland。
     runs-on: ubuntu-24.04
     container: debian:bookworm-slim
+    # **必须显式写**：container job 里 run: 的默认 shell 是 sh（dash），
+    # 而下面几个步骤用了 pipefail / <<<herestring / {a,b} 花括号展开，
+    # 全是 bash 才有的。一不显式声明就是
+    #   set: Illegal option -o pipefail
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v5
 
@@ -146,6 +153,9 @@ jobs:
           path: /tmp/csui/*.png
           if-no-files-found: ignore
 
+      # if: always() 是为了让 UI 冒烟挂了也还能把包传下来看；
+      # 因此这里报 "No files were found" 基本都只是**前面某一步已经挂了**的连带现象，
+      # 真正的原因在上面的日志里，往上翻。
       - name: 上传产物与自检报告
         if: always()
         uses: actions/upload-artifact@v5
