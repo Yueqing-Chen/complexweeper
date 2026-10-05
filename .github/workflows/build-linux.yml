@@ -44,15 +44,16 @@ jobs:
             squashfs-tools \
             clang libfuse3-dev libsquashfuse-dev \
             liblz4-dev liblzo2-dev liblzma-dev libzstd-dev zlib1g-dev \
-            xvfb x11-utils xdotool imagemagick fonts-noto-cjk
+            xvfb x11-utils xauth xdotool imagemagick fonts-noto-cjk
           git config --global --add safe.directory '*'
           # 工具链完整性自查：把 workflow 和四个脚本真正调到的外部命令挨个过一遍，
           # 少一个就在这里炸，别拖到几百行之后才报 command not found。
+          # xauth / Xvfb 是**间接**依赖——脚本只写 xvfb-run，是它内部去 exec 这俩的。
           missing=''
           for c in bash sed awk grep find mktemp readlink stat tail head basename dirname \
                    cat cp mv chmod strip file nm git curl tar xz \
                    python3 gcc clang node mksquashfs ldd pkill \
-                   xwininfo xdotool import convert; do
+                   Xvfb xvfb-run xauth xwininfo xdotool import convert; do
             command -v "$c" >/dev/null 2>&1 || missing="$missing $c"
           done
           if [ -n "$missing" ]; then
@@ -60,6 +61,16 @@ jobs:
             exit 1
           fi
           echo "工具链齐全 ✓  $(bash --version | head -1)  $(node --version)  $(gcc --version | head -1)  $(python3 --version)"
+
+      # 命令都在 ≠ 真能跑。xvfb-run 曾经因为少装 xauth 到 18 步冒烟才炸，
+      # 所以这里当场起一次真 X server，把 xauth / xdotool / xwininfo 串一遍。
+      # **不装窗口管理器**：无 WM 下窗口位置固定，冒烟脚本的硬编码坐标才准。
+      - name: X11 自检（真起一次 Xvfb）
+        run: |
+          set -euo pipefail
+          xvfb-run -a -s '-screen 0 320x240x24 -nolisten tcp' \
+            sh -c 'xwininfo -root >/dev/null && xdotool getdisplaygeometry >/dev/null'
+          echo "Xvfb + xauth + xdotool + xwininfo 串通 ✓"
 
       - uses: actions/checkout@v5
 
