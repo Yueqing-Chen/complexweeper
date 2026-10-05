@@ -66,3 +66,18 @@ jobs:
           gh release edit $tag --draft=false --latest | Out-Null
           Write-Host '--- Release 附件 ---'
           gh release view $tag --json assets --jq '.assets[] | "  \(.name)  \(.size) 字节"'
+
+  # Linux 端：复用 build-linux.yml 出 AppImage，挂到同一个 Release。
+  #
+  #   * 构建步骤不复制一份 —— 容器基础镜像、28 个 apt 包、squashfuse 版本钉死
+  #     全在 build-linux.yml 里维护，改一处两边同时生效。
+  #   * needs: release —— 让 windows job 先把 Release 建出来，这里只负责 upload。
+  #     两个 job 并行去 gh release create 会抢同一个 tag，串起来就没有这个竞态。
+  #   * 上面那个 release job 一行没动。
+  linux:
+    needs: release
+    permissions:
+      contents: write
+    uses: ./.github/workflows/build-linux.yml
+    with:
+      release_tag: ${{ github.ref_name }}

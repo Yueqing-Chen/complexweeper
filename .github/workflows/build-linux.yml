@@ -3,12 +3,21 @@ name: build-linux
 # Linux（AppImage）构建。**故意不并进 build.yml**：那里只有 windows job，
 # 单独开一个文件，原作者那边 review 时 diff 只多一个新文件，改 Windows 的风险为零。
 #
-# 触发条件跟 build.yml 保持一致（push main / PR / 手动）。
+# 触发条件跟 build.yml 保持一致（push main / PR / 手动），另外 workflow_call
+# 是给 release.yml 复用的 —— 打 v* 标签时由它调用本 workflow 出一份 AppImage，
+# 这样构建步骤（容器、工具链、版本钉死）只维护这一份，不会两处跑偏。
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: 非空则把 AppImage 挂到这个 tag 的 Release 上（只给 release.yml 用）
+        required: false
+        type: string
+        default: ''
 
 jobs:
   linux:
@@ -45,6 +54,7 @@ jobs:
             clang libfuse3-dev libsquashfuse-dev \
             liblz4-dev liblzo2-dev liblzma-dev libzstd-dev zlib1g-dev \
             fontconfig \
+            gh \
             xvfb x11-utils xauth xdotool imagemagick fonts-noto-cjk
           git config --global --add safe.directory '*'
           # 工具链完整性自查：把 workflow 和四个脚本真正调到的外部命令挨个过一遍，
@@ -242,3 +252,24 @@ jobs:
             正式版/build/*.AppImage
             正式版/build/selftest.txt
           if-no-files-found: error
+
+      # 被 release.yml 以 workflow_call 复用时才动作；普通 push/PR/手动触发下
+      # inputs 为空，这一步直接跳过，本 workflow 永远不碰 Release。
+      # 用真值判断而不是 `!= ''`：非 workflow_call 的触发方式下 inputs 是 null，
+      # GitHub 表达式里 null 与 '' 的比较行为不该拿来赌。
+      - name: 挂到 Release
+        if: inputs.release_tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          asset=$(ls 正式版/build/*.AppImage)
+          gh release view "$TAG" >/dev/null 2>&1 || {
+            echo "::error::Release $TAG 不存在。windows job 应该已经把它建好了（release.yml 里 linux job 写了 needs: release）。"
+            exit 1
+          }
+          gh release upload "$TAG" "$asset" --clobber
+          echo "--- Release 附件 ---"
+          gh release view "$TAG" --json assets \
+            --jq '.assets[] | "  \(.name)  \(.size) 字节"'

@@ -110,17 +110,32 @@ libfreetype-dev）。
 
 ### 持续集成
 
-两个平台各一个 workflow，push 到 `main`、提 PR、手动触发都会跑：
+三个平台相关的 workflow：
 
-| workflow | 平台 | 产物 |
-|---|---|---|
-| `.github/workflows/build.yml` | windows-latest | `复扫雷.exe` + 两份自检报告 |
-| `.github/workflows/build-linux.yml` | ubuntu-22.04 | `Complexweeper-1.0.12-x86_64.AppImage` + 自检报告 |
+| workflow | 触发 | 平台 | 产物 |
+|---|---|---|---|
+| `.github/workflows/build.yml` | push main / PR / 手动 | windows-latest | `复扫雷.exe` + 两份自检报告 |
+| `.github/workflows/build-linux.yml` | push main / PR / 手动 | `debian:bookworm-slim` 容器 | `Complexweeper-1.0.12-x86_64.AppImage` + 自检报告 |
+| `.github/workflows/release.yml` | 推 `v*` 标签 / 手动 | 上面两个 | Release 上同时挂 win64 的 exe 和 x86_64 的 AppImage |
 
 Linux 那个 job 会跑在 `debian:bookworm-slim` 容器里（宿主 `ubuntu-24.04` 只提供内核），
 从头跑一遍上面这一套：编 runtime → X11 绑定对账 → 编译 + 规则自检 + 打 AppImage →
 验 AppImage 能在无 FUSE 下解开并跑起来 → Xvfb 里跑完 18 步 UI 冒烟。冒烟失败会把
 截图作为 artifact 传上来。
+
+发 Release 时 `release.yml` 用 `workflow_call` **复用** `build-linux.yml` 出 AppImage，
+构建步骤不复制第二份（容器、依赖、版本钉死都只维护一处）。Linux job 写了
+`needs: release`，让 Windows 先把 Release 建出来、Linux 只负责 upload —— 两个 job
+并行去 `gh release create` 会抢同一个 tag，串起来就没这个竞态。`release.yml` 里原来
+那个 Windows job 一行没动。
+
+**发 Release 要推标签，不能在分支上手动触发**：`release.yml` 用
+`github.ref_name` 当 tag，在 `main` 上手动触发会去建一个叫 `main` 的 Release，
+而仓库里没有这个 git tag，`--verify-tag` 直接拒绝。
+
+```bash
+git tag v1.0.12 && git push origin v1.0.12
+```
 
 **为什么是 bookworm 容器而不是 ubuntu runner**：AppImage runtime 要链
 `libsquashfuse`，而各发行版的可用程度差别很大——
