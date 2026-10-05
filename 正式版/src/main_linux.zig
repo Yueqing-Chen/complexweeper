@@ -14,7 +14,7 @@ const selftest = @import("selftest.zig");
 // ------------------------------------------------------------------ 常量
 const APP_TITLE = "复扫雷 Complexweeper";
 /// 与 Windows 版同一个版本号（main.zig 的 APP_VERSION，改动时两边一起改）
-const APP_VERSION = "1.0.12";
+const APP_VERSION = "1.0.13";
 
 /// 菜单栏高度。X11 没有系统菜单栏，这一条由我们自己画在客户区最上面，
 /// 于是棋盘整体往下挪 MENU_H。

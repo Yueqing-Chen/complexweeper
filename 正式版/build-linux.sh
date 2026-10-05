@@ -21,9 +21,19 @@ PKG=1
 
 APP_NAME="Complexweeper"
 APP_TITLE="复扫雷 Complexweeper"
-# 版本号直接取 src/main.zig 里的 APP_VERSION，跟 build.ps1 读的是同一处
+# 版本号直接取 src/main.zig 里的 APP_VERSION，跟 build.ps1 读的是同一处，
+# 产出的文件名和 release.yml 的附件名都由它决定。
 APP_VERSION=$(sed -n 's/.*const APP_VERSION = "\([^"]*\)".*/\1/p' src/main.zig | head -1)
 [ -n "$APP_VERSION" ] || { echo "读不到 APP_VERSION，检查 src/main.zig"; exit 1; }
+# main_linux.zig 里另有一份 APP_VERSION（main.zig 是 Windows 程序，带一堆 win32 依赖，
+# Linux 这边没法 import，只能各留一份）。两份必须一致——不一致的话 --version 显示的
+# 和包文件名会对不上，而且没人会发现。
+LINUX_VERSION=$(sed -n 's/.*const APP_VERSION = "\([^"]*\)".*/\1/p' src/main_linux.zig | head -1)
+if [ "$LINUX_VERSION" != "$APP_VERSION" ]; then
+    echo "版本号不一致：src/main.zig = $APP_VERSION，src/main_linux.zig = ${LINUX_VERSION:-读不到}" >&2
+    echo "两处都要改，否则 --version 显示的和 AppImage 文件名对不上" >&2
+    exit 1
+fi
 
 ZIG_VER=$("$ZIG" version)
 case "$ZIG_VER" in
@@ -47,6 +57,10 @@ node tools/gen_atlas.js
 
 echo "== 2/6 编译 x86_64-linux =="
 mkdir -p "$BUILD"
+# 把上一版残留的 AppImage 清掉。文件名带版本号，升降版本后 build/ 里会同时躺着
+# 好几个，而 CI 的「挂到 Release」和本地验产物都是 ls build/*.AppImage —— 一旦匹配到
+# 多份，取到的就不一定是这次的产物。
+rm -f "$BUILD"/*.AppImage
 "$ZIG" build-exe src/main_linux.zig \
     -target x86_64-linux-gnu -O ReleaseSmall \
     -L/usr/lib/x86_64-linux-gnu -lc -lX11 -lXft -lfontconfig \
