@@ -27,13 +27,19 @@ jobs:
       # 依赖装在 checkout 之前：debian:bookworm-slim 里没有 git，
       # 先装上 git，checkout 才走 git 而不是退化成 REST API 下载 tarball。
       # 顺带把 git config 也提前设好，免得 checkout 在 root 下被 dubious ownership 拦。
+      #
+      # node 也走 apt（bookworm 是 18.20.x），**不用 actions/setup-node**：
+      # 那玩意儿在 container job 里落到哪儿并不确定，还得再开一步去断言，
+      # 等于把「node 存不存在」变成两处都得对。apt 装完当场就能验。
+      # gen_atlas.js / make_icon.js 只用 require / fs / zlib / path 这些老 API，
+      # node 12+ 都跑得动，不需要 20（Windows 那个 job 仍用 setup-node 的 20）。
       - name: 装构建依赖
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             git ca-certificates \
             binutils curl file xz-utils \
-            python3 gcc procps \
+            python3 gcc procps nodejs \
             libx11-dev libxft-dev libfreetype-dev libfontconfig1-dev \
             squashfs-tools \
             clang libfuse3-dev libsquashfuse-dev \
@@ -53,7 +59,7 @@ jobs:
             echo "::error::缺这些命令：$missing"
             exit 1
           fi
-          echo "工具链齐全 ✓（$(command -v bash | head -1) / shell=$BASH_VERSION）"
+          echo "工具链齐全 ✓  $(bash --version | head -1)  $(node --version)  $(gcc --version | head -1)  $(python3 --version)"
 
       - uses: actions/checkout@v5
 
@@ -92,18 +98,9 @@ jobs:
           [ "$bad" = 0 ] || exit 1
           echo "低层 FUSE 符号齐全 ✓"
 
-      - uses: actions/setup-node@v5
-        with:
-          node-version: '20'
-
       - name: 装 Zig 0.14.1
         run: |
           set -euo pipefail
-          # node 是打包脚本的硬依赖（生成图集 + 切图标），前面已经装过。
-          # 顺带确认 setup-node 在容器里真的把 node 放上了 PATH。
-          command -v node >/dev/null || { echo "::error::node 不在 PATH 上，gen_atlas.js / make_icon.js 跑不了"; exit 1; }
-          node --version
-
           url='https://ziglang.org/download/0.14.1/zig-x86_64-linux-0.14.1.tar.xz'
           curl -fsSL -m 300 -o "$RUNNER_TEMP/zig.tar.xz" "$url"
           # tar 自己不带 xz 解压器，会 exec 外部的 xz —— slim 镜像里默认没有，
