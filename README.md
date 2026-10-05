@@ -117,12 +117,22 @@ libfreetype-dev）。
 | `.github/workflows/build.yml` | windows-latest | `复扫雷.exe` + 两份自检报告 |
 | `.github/workflows/build-linux.yml` | ubuntu-22.04 | `Complexweeper-1.0.12-x86_64.AppImage` + 自检报告 |
 
-Linux 那个 job 会在 Actions 里从头跑一遍上面这一套：编 runtime → X11 绑定对账 →
-编译 + 规则自检 + 打 AppImage → 验 AppImage 能在无 FUSE 下解开并跑起来 → Xvfb 里
-跑完 18 步 UI 冒烟。冒烟失败会把截图作为 artifact 传上来。
+Linux 那个 job 会跑在 `debian:bookworm-slim` 容器里（宿主 `ubuntu-24.04` 只提供内核），
+从头跑一遍上面这一套：编 runtime → X11 绑定对账 → 编译 + 规则自检 + 打 AppImage →
+验 AppImage 能在无 FUSE 下解开并跑起来 → Xvfb 里跑完 18 步 UI 冒烟。冒烟失败会把
+截图作为 artifact 传上来。
 
-runner 版本钉死在 `ubuntu-22.04`，因为 `libsquashfuse-dev` 的版本得跟 runtime 配套；
-换发行版前先看 `正式版/tools/appimage-runtime/README.md`。
+**为什么是 bookworm 容器而不是 ubuntu runner**：AppImage runtime 要链
+`libsquashfuse`，而各发行版的可用程度差别很大——
+
+| 环境 | libsquashfuse-dev | 能不能编 |
+|---|---|---|
+| debian bookworm | 0.1.105-1 | 能，符号齐全 |
+| ubuntu-22.04 | 0.1.103-3 | **不能**，低层 FUSE 实现（`sqfs_ll_op_*` 等）整个不在包里 |
+| ubuntu-24.04 | 0.5.0 | 不能，API 与 `sqfs_opts` 布局早已不兼容 |
+
+workflow 里除了钉版本号，还查一遍静态库有没有那几个关键符号——0.1.103 那个坑
+光看头文件发现不了（`sqfs_opts` 布局和 0.1.105 一模一样），只有查符号才拦得住。
 
 ## 素材来源：
 扫雷原始图像素材：Microsoft（原版扫雷作者 Robert Donner、Curt Johnson）。

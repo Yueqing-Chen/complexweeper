@@ -13,7 +13,8 @@ rc1=$?
 
 echo
 echo "== 2/3 准备结构体对账 =="
-gcc -o /tmp/cs_structs tools/struct_sizes.c -I/usr/include/freetype2 -lX11 -lXft 2>/dev/null
+# 用 $CC（默认 gcc），只要装了 clang 的机器也能跑
+${CC:-gcc} -o /tmp/cs_structs tools/struct_sizes.c -I/usr/include/freetype2 -lX11 -lXft 2>/dev/null
 if [ ! -x /tmp/cs_structs ]; then
     echo "  （跳过：编译不了 struct_sizes.c，缺 dev 头文件？）"
     exit $rc1

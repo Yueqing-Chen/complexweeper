@@ -13,34 +13,61 @@ on:
 jobs:
   linux:
     name: AppImage x86_64
-    # 钉在 22.04：libsquashfuse-dev 是 0.1.105（跟 runtime 的 sqfs_opts 布局配套，
-    # 换发行版就得重新验）。别改成 latest。
-    runs-on: ubuntu-22.04
+    # 宿主只提供内核，真正干活的是下面的容器 userland。
+    runs-on: ubuntu-24.04
+    container: debian:bookworm-slim
     steps:
       - uses: actions/checkout@v5
 
       - name: 装构建依赖
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            git ca-certificates \
             binutils curl file \
+            python3 gcc procps \
             libx11-dev libxft-dev libfreetype-dev libfontconfig1-dev \
             squashfs-tools \
             clang libfuse3-dev libsquashfuse-dev \
             liblz4-dev liblzo2-dev liblzma-dev libzstd-dev zlib1g-dev \
             xvfb x11-utils xdotool imagemagick fonts-noto-cjk
+          # 容器里以 root 跑，git 会拒绝操作别的 uid 建出来的 .git
+          git config --global --add safe.directory '*'
 
       # runtime.c 是按 sqfs_opts 的内存布局写 mountpoint 的，链接进去的
       # libsquashfuse 按它自己那版布局写 —— 版本一错位，编译照过、运行时报
       # "Usage: ... ARCHIVE MOUNTPOINT"。这里提前钉死，别等产物坏了才发现。
-      - name: 核对 libsquashfuse 版本
+      #
+      # 之所以用 debian:bookworm 容器而不是 ubuntu runner：
+      #   ubuntu-22.04 的 libsquashfuse-dev 是 0.1.103-3，**编不出 FUSE 版**——
+      #   包里 sqfs_ll_op_* / setup_idle_timeout 这些低层 FUSE 实现整个缺失
+      #   （实测：三个 .a 和三个 .so 里一个都没有），链接必然失败。
+      #   ubuntu-24.04 是 0.5.0，API 与 sqfs_opts 布局早就不兼容了。
+      #   bookworm 的 0.1.105-1 是唯一现成可用的组合，也就是本地验证时用的那套。
+      #   换容器基础镜像前，先照 正式版/tools/appimage-runtime/README.md 重新验一遍。
+      - name: 核对 libsquashfuse（版本 + 符号）
         run: |
+          set -uo pipefail
           got=$(dpkg-query -W -f='${Version}' libsquashfuse-dev)
           echo "libsquashfuse-dev = $got"
           case "$got" in
             0.1.105*) ;;
             *) echo "::error::squashfuse 不是 0.1.105，runtime 会链错。版本配套表见 正式版/tools/appimage-runtime/README.md" ; exit 1 ;;
           esac
+          # 版本号对了也不一定够用：Ubuntu 22.04 的 0.1.103-3 头文件里 sqfs_opts
+          # 布局跟 0.1.105 一模一样，看着没问题，但三个静态库里 sqfs_ll_op_*、
+          # setup_idle_timeout 这些低层 FUSE 实现**一个都没有**（Ubuntu 那版把
+          # FUSE 支持裁掉了），链接会刷一屏 undefined reference。直接查符号。
+          syms=$(nm -g --defined-only /usr/lib/x86_64-linux-gnu/lib{squashfuse,squashfuse_ll,fuseprivate}.a 2>/dev/null || true)
+          bad=0
+          for s in sqfs_ll_op_create sqfs_ll_op_read stfs_ll_op_statfs setup_idle_timeout sqfs_opt_proc sqfs_usage; do
+            if ! grep -qw "$s" <<<"$syms"; then
+              echo "::error::libsquashfuse-dev 静态库缺少符号 $s，这个版本编不出带 FUSE 的 runtime"
+              bad=1
+            fi
+          done
+          [ "$bad" = 0 ] || exit 1
+          echo "低层 FUSE 符号齐全 ✓"
 
       - uses: actions/setup-node@v5
         with:
@@ -107,7 +134,8 @@ jobs:
           set -euo pipefail
           xvfb-run -a -s '-screen 0 1280x900x24 -nolisten tcp' \
             ./tools/ui_smoke.sh build/cs-linux /tmp/csui
-          ls /tmp/csui | head
+          # 用 sed 不用 head：head 提前退出会给 ls 发 SIGPIPE，set -e + pipefail 会误判失败
+          ls /tmp/csui | sed -n '1,12p'
 
       # 失败时把截图捞出来看 —— 这个冒烟就是靠肉眼截图抓出「数字不显示」「文字偏下」的
       - name: 冒烟截图（仅失败时）

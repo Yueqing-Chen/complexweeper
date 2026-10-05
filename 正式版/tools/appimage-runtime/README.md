@@ -43,6 +43,25 @@ Cannot mount AppImage, please check your FUSE setup.
 
 ## 重新编译
 
+**得在 Debian bookworm 上做**（或者任何 `libsquashfuse-dev` 是 0.1.105 的环境）。
+其他发行版目前都不行：
+
+| 环境 | libsquashfuse-dev | 能不能编 |
+|---|---|---|
+| debian bookworm | 0.1.105-1 | 能 |
+| ubuntu-22.04 | 0.1.103-3 | **不能**：静态库里没有 `sqfs_ll_op_*` / `setup_idle_timeout` 这些低层 FUSE 实现（Ubuntu 那版把 FUSE 支持裁掉了），链接必炸 |
+| ubuntu-24.04 | 0.5.0 | 不能：`sqfs_opts` 布局和 API 都变了 |
+
+注意 0.1.103 和 0.1.105 的 `fuseprivate.h` 里 `sqfs_opts` **布局完全一样**（5 个字段，
+`mountpoint` 在偏移 16），光对头文件发现不了 22.04 编不出来——得查静态库的符号：
+
+```bash
+nm -g --defined-only /usr/lib/x86_64-linux-gnu/lib{squashfuse,squashfuse_ll,fuseprivate}.a \
+  | grep -E 'sqfs_ll_op_create|setup_idle_timeout'
+```
+
+CI 里就是这么拦的。装依赖：
+
 ```bash
 sudo apt-get install -y clang libfuse3-dev libsquashfuse-dev \
     liblz4-dev liblzo2-dev liblzma-dev libzstd-dev zlib1g-dev binutils
