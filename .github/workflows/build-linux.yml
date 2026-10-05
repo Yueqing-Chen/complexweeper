@@ -44,6 +44,7 @@ jobs:
             squashfs-tools \
             clang libfuse3-dev libsquashfuse-dev \
             liblz4-dev liblzo2-dev liblzma-dev libzstd-dev zlib1g-dev \
+            fontconfig \
             xvfb x11-utils xauth xdotool imagemagick fonts-noto-cjk
           git config --global --add safe.directory '*'
           # 工具链完整性自查：把 workflow 和四个脚本真正调到的外部命令挨个过一遍，
@@ -141,6 +142,51 @@ jobs:
       - name: 编译 + 规则自检 + 打 AppImage
         working-directory: 正式版
         run: ./build-linux.sh
+
+      # UI 冒烟报「启动就退了」时，日志里只有一个信号号，定位不到死在哪一步。
+      # 这里先单独把「启动」拎出来验：开 XSPY_TRACE 跑 4 秒，看还活着没有，
+      # 并把容器环境事实（栈上限 / 内存 / /dev/shm / 字体缓存）连同 stderr 全打出来。
+      # 装 fontconfig 是为了 fc-match / fc-cache —— 字体解析出问题时一眼能看出来。
+      - name: 启动自检（带 trace）
+        working-directory: 正式版
+        run: |
+          set -uo pipefail
+          {
+            echo "--- 容器环境 ---"
+            id
+            ulimit -a
+            free -m || true
+            df -h /dev/shm || true
+            echo "字体: $(fc-match 'Noto Sans CJK' 2>&1 | head -1)"
+            echo "字体缓存:"; ls -l /var/cache/fontconfig/ 2>&1 | head -5
+          } 2>&1 | sed 's/^/  /'
+
+          export XSPY_TRACE=1
+          xvfb-run -a -s '-screen 0 1280x900x24 -nolisten tcp' \
+            sh -c '
+              ./build/cs-linux >/tmp/boot.out 2>/tmp/boot.err &
+              pid=$!
+              sleep 4
+              if kill -0 "$pid" 2>/dev/null; then
+                echo "启动 4 秒后仍存活 ✓"
+                kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; exit 0
+              fi
+              wait "$pid" 2>/dev/null; rc=$?
+              echo "!! 启动后退出 rc=$rc"
+              echo "--- stderr ---"; cat /tmp/boot.err
+              exit 1
+            '
+
+      # 启动自检的原始输出，失败时留证据
+      - name: 启动自检输出（仅失败时）
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: complexweeper-boot-${{ github.sha }}
+          path: |
+            /tmp/boot.out
+            /tmp/boot.err
+          if-no-files-found: ignore
 
       - name: 验 AppImage 本身
         run: |
